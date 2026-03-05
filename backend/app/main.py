@@ -38,8 +38,14 @@ app.add_middleware(
 app.include_router(api_router)
 
 
+logger = logging.getLogger(__name__)
+
+
 @app.on_event("startup")
 async def startup():
+    logger.info("ALLEGRO_REDIRECT_URI = %s", settings.allegro_redirect_uri)
+    logger.info("ENVIRONMENT = %s", settings.environment)
+
     # NTP sync before anything else
     await timing.sync_ntp_async()
 
