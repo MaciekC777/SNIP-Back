@@ -251,7 +251,12 @@ function SnipesTab() {
         body: JSON.stringify({ allegro_offer_url: url.trim(), max_bid_amount: parseFloat(maxBid) }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`)
+      if (!res.ok) {
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join(', ')
+          : (data.detail ?? `HTTP ${res.status}`)
+        throw new Error(detail)
+      }
       setSuccess(`Snipe dodany!`)
       setUrl('')
       setMaxBid('')
