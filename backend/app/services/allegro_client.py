@@ -70,14 +70,14 @@ async def _request(
 
 # ---------- Public API ----------
 
-async def get_offer(offer_id: str) -> dict[str, Any]:
+async def get_offer(offer_id: str, access_token: Optional[str] = None) -> dict[str, Any]:
     """Fetch offer details (title, endingAt, currentPrice, etc.)."""
     url = f"{settings.allegro_api_url}/offers/{offer_id}"
-    # Public endpoint — no token needed for basic info
     session = get_session()
+    auth_header = f"Bearer {access_token}" if access_token else f"Basic {_basic_auth()}"
     headers = {
         "Accept": "application/vnd.allegro.public.v1+json",
-        "Authorization": f"Basic {_basic_auth()}",
+        "Authorization": auth_header,
     }
     async with session.get(url, headers=headers) as resp:
         if resp.status == 404:

@@ -9,18 +9,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.auth import decode_session_token
 from app.models.schemas import SnipeCreate, SnipeResponse, SnipeStatus
-from app.services import allegro_client, supabase_client
+from app.services import allegro_client, supabase_client, token_manager
 
 router = APIRouter(prefix="/snipes", tags=["snipes"])
 
 
 def _extract_offer_id(url: str) -> str:
     """Extract numeric offer ID from an Allegro URL."""
-    # Try ?offerId=... query param first (produkt URLs)
     qs_match = re.search(r"[?&]offerId=(\d+)", url)
     if qs_match:
         return qs_match.group(1)
-    # Fall back to trailing numeric ID in path (standard oferta URLs)
     match = re.search(r"-(\d+)$", url.rstrip("/").split("?")[0])
     if not match:
         raise ValueError(f"Cannot extract offer ID from URL: {url}")
@@ -51,7 +49,8 @@ async def create_snipe(payload: SnipeCreate, user: dict = Depends(_require_user)
     offer_image_url: Optional[str] = None
     current_price: Optional[float] = None
     try:
-        offer = await allegro_client.get_offer(offer_id)
+        access_token = token_manager.decrypt_token(user["encrypted_access_token"])
+        offer = await allegro_client.get_offer(offer_id, access_token=access_token)
         offer_title = offer.get("name") or offer.get("title")
         offer_end_time = offer.get("endingAt") or offer.get("endTime")
         images = offer.get("images") or []
