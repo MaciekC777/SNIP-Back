@@ -203,7 +203,8 @@ function AuthTab() {
 // ─── Snipes Tab ───────────────────────────────────────────────────────────────
 
 function SnipesTab() {
-  const [userId, setUserId] = useState('')
+  const [token, setToken] = useState('')
+  const [userLogin, setUserLogin] = useState('')
   const [url, setUrl] = useState('')
   const [maxBid, setMaxBid] = useState('')
   const [snipes, setSnipes] = useState<Snipe[]>([])
@@ -212,12 +213,19 @@ function SnipesTab() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  useEffect(() => {
+    const t = localStorage.getItem('lastbid_token') ?? ''
+    const l = localStorage.getItem('lastbid_login') ?? ''
+    setToken(t)
+    setUserLogin(l)
+  }, [])
+
   const fetchSnipes = useCallback(async () => {
-    if (!userId.trim()) return
+    if (!token) return
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${API}/snipes?user_id=${encodeURIComponent(userId.trim())}`)
+      const res = await fetch(`${API}/snipes?token=${encodeURIComponent(token)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setSnipes(await res.json())
     } catch (e) {
@@ -225,7 +233,11 @@ function SnipesTab() {
     } finally {
       setLoading(false)
     }
-  }, [userId])
+  }, [token])
+
+  useEffect(() => {
+    if (token) fetchSnipes()
+  }, [token, fetchSnipes])
 
   const addSnipe = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -233,14 +245,14 @@ function SnipesTab() {
     setError('')
     setSuccess('')
     try {
-      const res = await fetch(`${API}/snipes?user_id=${encodeURIComponent(userId.trim())}`, {
+      const res = await fetch(`${API}/snipes?token=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ allegro_offer_url: url.trim(), max_bid_amount: parseFloat(maxBid) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`)
-      setSuccess(`Snipe dodany! ID: ${data.id}`)
+      setSuccess(`Snipe dodany!`)
       setUrl('')
       setMaxBid('')
       fetchSnipes()
@@ -253,7 +265,7 @@ function SnipesTab() {
 
   const cancelSnipe = async (snipeId: string) => {
     try {
-      const res = await fetch(`${API}/snipes/${snipeId}/cancel?user_id=${encodeURIComponent(userId.trim())}`, {
+      const res = await fetch(`${API}/snipes/${snipeId}/cancel?token=${encodeURIComponent(token)}`, {
         method: 'POST',
       })
       if (!res.ok) { const d = await res.json(); throw new Error(d.detail) }
@@ -263,7 +275,7 @@ function SnipesTab() {
 
   const deleteSnipe = async (snipeId: string) => {
     try {
-      const res = await fetch(`${API}/snipes/${snipeId}?user_id=${encodeURIComponent(userId.trim())}`, {
+      const res = await fetch(`${API}/snipes/${snipeId}?token=${encodeURIComponent(token)}`, {
         method: 'DELETE',
       })
       if (!res.ok) { const d = await res.json(); throw new Error(d.detail) }
@@ -271,24 +283,28 @@ function SnipesTab() {
     } catch (e) { setError(String(e)) }
   }
 
+  if (!token) {
+    return (
+      <div className="bg-gray-900 rounded-lg p-6 text-center space-y-3">
+        <p className="text-gray-400 text-sm">Nie jesteś zalogowany.</p>
+        <p className="text-gray-500 text-xs">Przejdź do zakładki <strong className="text-white">Auth</strong> i zaloguj się przez Allegro.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
-      <div className="bg-gray-900 rounded-lg p-4 flex gap-3 items-end">
-        <div className="flex-1">
-          <label className="block text-xs text-gray-400 mb-1">Allegro User ID</label>
-          <input
-            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
-            placeholder="np. 12345678"
-            value={userId}
-            onChange={e => setUserId(e.target.value)}
-          />
+      <div className="bg-gray-900 rounded-lg p-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-500" />
+          <span className="text-sm text-gray-300">Zalogowany jako <strong className="text-white">{userLogin}</strong></span>
         </div>
         <button
           onClick={fetchSnipes}
-          disabled={!userId.trim() || loading}
-          className="bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-4 py-2 rounded text-sm transition-colors"
+          disabled={loading}
+          className="text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-3 py-1.5 rounded transition-colors"
         >
-          {loading ? '...' : 'Pobierz'}
+          {loading ? '...' : 'Odśwież'}
         </button>
       </div>
 
@@ -309,7 +325,7 @@ function SnipesTab() {
           />
           <button
             type="submit"
-            disabled={!userId.trim() || addLoading}
+            disabled={addLoading}
             className="bg-orange-600 hover:bg-orange-500 disabled:opacity-40 px-4 py-2 rounded font-bold transition-colors text-sm"
           >
             {addLoading ? '...' : 'Dodaj'}

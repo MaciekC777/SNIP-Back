@@ -7,13 +7,12 @@ import hmac
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from app.config import settings
-from app.models.schemas import TokenResponse
 from app.services import allegro_client, supabase_client, token_manager
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -25,8 +24,11 @@ ALLEGRO_SCOPES = " ".join([
     "allegro:api:orders:read",
 ])
 
-_STATE_TTL = 600  # 10 minut
+_STATE_TTL = 600       # 10 minut
+_SESSION_TTL = 30 * 24 * 3600  # 30 dni
 
+
+# ─── State helpers ────────────────────────────────────────────────────────────
 
 def _sign_state(nonce: str) -> str:
     """Return 'nonce.timestamp.hmac' — verifiable without shared memory."""
@@ -51,6 +53,35 @@ def _verify_state(state: str) -> bool:
     return hmac.compare_digest(sig, expected)
 
 
+# ─── Session token helpers ────────────────────────────────────────────────────
+
+def _generate_session_token(allegro_user_id: str) -> str:
+    ts = str(int(time.time()))
+    msg = f"{allegro_user_id}.{ts}".encode()
+    sig = hmac.new(settings.encryption_key.encode(), msg, hashlib.sha256).hexdigest()
+    return f"{allegro_user_id}.{ts}.{sig}"
+
+
+def decode_session_token(token: str) -> str | None:
+    """Return allegro_user_id if token is valid, else None."""
+    parts = token.rsplit(".", 2)
+    if len(parts) != 3:
+        return None
+    allegro_user_id, ts, sig = parts
+    try:
+        if time.time() - int(ts) > _SESSION_TTL:
+            return None
+    except ValueError:
+        return None
+    msg = f"{allegro_user_id}.{ts}".encode()
+    expected = hmac.new(settings.encryption_key.encode(), msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return allegro_user_id
+
+
+# ─── Endpoints ────────────────────────────────────────────────────────────────
+
 @router.get("/login")
 async def login():
     """Redirect user to Allegro OAuth2 authorisation page."""
@@ -67,7 +98,7 @@ async def login():
     return RedirectResponse(url=url)
 
 
-@router.get("/callback", response_model=TokenResponse)
+@router.get("/callback")
 async def callback(
     code: str = Query(...),
     state: str = Query(...),
@@ -86,7 +117,6 @@ async def callback(
     expires_in = int(token_data.get("expires_in", 3600))
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    # Fetch user profile to get their Allegro ID
     try:
         profile = await allegro_client.get_user_profile(access_token)
     except Exception as exc:
@@ -106,10 +136,12 @@ async def callback(
         token_expires_at=expires_at,
     )
 
-    return TokenResponse(
-        message="Authorisation successful",
-        user_login=allegro_login,
+    session_token = _generate_session_token(allegro_user_id)
+    redirect_url = (
+        f"{settings.frontend_url}/callback"
+        f"?token={quote(session_token)}&login={quote(allegro_login)}"
     )
+    return RedirectResponse(url=redirect_url)
 
 
 @router.post("/refresh")
