@@ -71,9 +71,13 @@ async def _request(
 # ---------- Public API ----------
 
 async def get_offer(offer_id: str, access_token: Optional[str] = None) -> dict[str, Any]:
-    """Fetch offer details (title, endingAt, currentPrice, etc.)."""
-    url = f"{settings.allegro_api_url}/sale/offers/{offer_id}"
-    return await _request("GET", url, access_token=access_token)
+    """Fetch offer details (title, endingAt, currentPrice, etc.) via public listing search."""
+    url = f"{settings.allegro_api_url}/offers/listing"
+    result = await _request("GET", url, access_token=access_token, params={"offer.id": offer_id, "limit": 1})
+    items = result.get("items", {}).get("regular", [])
+    if not items:
+        raise AllegroNotFoundError(f"Offer {offer_id} not found")
+    return items[0]
 
 
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:
