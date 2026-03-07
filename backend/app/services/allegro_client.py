@@ -120,32 +120,24 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
 
 
 async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> Optional[dict[str, Any]]:
-    """Scrape auction end time and basic details from the Allegro offer page."""
+    """Scrape auction end time and basic details from the Allegro offer page.
+
+    Uses curl_cffi to impersonate Chrome TLS fingerprint — bypasses Cloudflare bot protection.
+    """
     import json as _json
     import re as _re
+    from curl_cffi.requests import AsyncSession
 
     url = offer_url or f"https://allegro.pl/oferta/{offer_id}"
-    session = get_session()
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
     try:
-        async with session.get(
-            url, headers=headers, allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status == 404:
-                raise AllegroNotFoundError(f"Offer {offer_id} not found (scrape 404)")
-            if resp.status != 200:
-                logger.warning("_scrape_offer_page: %s → %d", url, resp.status)
-                return None
-            html = await resp.text()
+        async with AsyncSession(impersonate="chrome120") as s:
+            resp = await s.get(url, timeout=15, allow_redirects=True)
+        if resp.status_code == 404:
+            raise AllegroNotFoundError(f"Offer {offer_id} not found (scrape 404)")
+        if resp.status_code != 200:
+            logger.warning("_scrape_offer_page: %s → %d", url, resp.status_code)
+            return None
+        html = resp.text
     except AllegroNotFoundError:
         raise
     except Exception as exc:
