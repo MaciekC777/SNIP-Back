@@ -39,12 +39,13 @@ class UserResponse(BaseModel):
 class SnipeCreate(BaseModel):
     allegro_offer_url: str
     max_bid_amount: float
+    offer_end_time: Optional[datetime] = None  # optional override — skip auto-fetch when provided
 
     @field_validator("allegro_offer_url")
     @classmethod
     def validate_allegro_url(cls, v: str) -> str:
         pattern = r"allegro\.pl/.+-(\d+)"
-        if not re.search(pattern, v):
+        if not re.search(pattern, v) and "offerId=" not in v:
             raise ValueError("URL must be a valid Allegro offer link")
         return v.strip()
 
