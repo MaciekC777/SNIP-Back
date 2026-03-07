@@ -75,11 +75,24 @@ async def _request(
 
 
 async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url: Optional[str] = None) -> dict[str, Any]:
-    """Fetch offer details via bidding API (works with allegro:api:bids scope)."""
-    url = f"{settings.allegro_api_url}/bidding/offers/{offer_id}/bids"
-    result = await _request("GET", url, access_token=access_token)
-    logger.info("bidding/bids response keys for %s: %s", offer_id, list(result.keys()))
-    return result
+    """Fetch offer details — try multiple endpoints."""
+    # Try 1: GET /offers/{id}
+    try:
+        result = await _request("GET", f"{settings.allegro_api_url}/offers/{offer_id}", access_token=access_token)
+        logger.info("GET /offers/%s keys: %s", offer_id, list(result.keys()))
+        return result
+    except Exception as e1:
+        logger.warning("GET /offers/%s failed: %s", offer_id, e1)
+
+    # Try 2: GET /bidding/offers/{id}
+    try:
+        result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}", access_token=access_token)
+        logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
+        return result
+    except Exception as e2:
+        logger.warning("GET /bidding/offers/%s failed: %s", offer_id, e2)
+
+    raise AllegroNotFoundError(f"Could not fetch offer {offer_id} from any endpoint")
 
 
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:
