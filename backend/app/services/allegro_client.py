@@ -189,6 +189,9 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     price: Optional[str] = None
 
     # Primary: parse __NEXT_DATA__ JSON (Next.js SSR)
+    # Log HTML snippet to diagnose what page ScraperAPI returned
+    logger.info("_scrape_offer_page: HTML head: %s", html[:500].replace("\n", " "))
+
     nd_match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', html)
     if nd_match:
         try:
