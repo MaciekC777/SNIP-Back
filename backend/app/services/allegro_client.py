@@ -58,6 +58,9 @@ async def _request(
                     continue
                 if resp.status == 401:
                     raise AllegroUnauthorizedError("Access token expired or invalid")
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("Allegro API %s %s → %d: %s", method, url, resp.status, body[:500])
                 resp.raise_for_status()
                 return await resp.json()
         except AllegroUnauthorizedError:
