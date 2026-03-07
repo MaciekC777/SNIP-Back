@@ -25,6 +25,9 @@ ALLEGRO_SCOPES = " ".join([
     "allegro:api:orders:read",
 ])
 
+# NOTE: allegro:api:sale:offers:read added to test GET /sale/offers/{offerId}
+# — returns publication.endingAt if accessible for non-sellers
+
 _STATE_TTL = 600       # 10 minut
 _SESSION_TTL = 30 * 24 * 3600  # 30 dni
 

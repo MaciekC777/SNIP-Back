@@ -107,7 +107,24 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         except Exception as e1:
             logger.warning("GET /offers/listing failed: %s", e1)
 
-    # Try 2: GET /bidding/offers/{id}
+    # Try 2: GET /sale/offers/{id} — requires allegro:api:sale:offers:read scope
+    # Works if Allegro allows buyers to read any offer details (not just seller's own)
+    try:
+        result = await _request("GET", f"{settings.allegro_api_url}/sale/offers/{offer_id}", access_token=access_token)
+        end = (
+            result.get("publication", {}).get("endingAt")
+            or result.get("endingAt")
+        )
+        logger.info("GET /sale/offers/%s → publication.endingAt=%r keys=%s", offer_id, end, list(result.keys()))
+        return result
+    except AllegroAccessDeniedError as e2:
+        logger.warning("GET /sale/offers/%s access denied (seller-only endpoint): %s", offer_id, e2)
+    except AllegroNotFoundError:
+        raise
+    except Exception as e2:
+        logger.warning("GET /sale/offers/%s failed: %s", offer_id, e2)
+
+    # Try 3: GET /bidding/offers/{id}
     try:
         result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}", access_token=access_token)
         logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
