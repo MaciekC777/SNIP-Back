@@ -151,9 +151,8 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
 
     try:
         if settings.scraper_api_key:
-            # Use Polish residential proxy (country_code=pl) — Allegro may geo-restrict
-            # No render=true: Next.js SSR includes __NEXT_DATA__ in initial HTML
-            proxy_url = f"https://api.scraperapi.com?{urlencode({'api_key': settings.scraper_api_key, 'url': target_url, 'country_code': 'pl'})}"
+            # Polish residential proxy + render=true for JS-rendered auction data
+            proxy_url = f"https://api.scraperapi.com?{urlencode({'api_key': settings.scraper_api_key, 'url': target_url, 'country_code': 'pl', 'render': 'true'})}"
             session = get_session()
             async with session.get(proxy_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                 status = resp.status
@@ -191,6 +190,8 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     # Primary: parse __NEXT_DATA__ JSON (Next.js SSR)
     # Log HTML snippet to diagnose what page ScraperAPI returned
     logger.info("_scrape_offer_page: HTML head: %s", html[:500].replace("\n", " "))
+    has_ending = "endingAt" in html or "endingTime" in html or "endTime" in html
+    logger.info("_scrape_offer_page: html contains ending key: %s", has_ending)
 
     nd_match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', html)
     if nd_match:
