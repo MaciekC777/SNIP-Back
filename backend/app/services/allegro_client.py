@@ -222,15 +222,18 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
         m = _re.search(r'"(?:endingAt|endingTime|endTime)"\s*:\s*"([^"]+)"', html)
         ending_at = m.group(1) if m else None
 
-    # Strategy 4: ISO datetime near offer ID (e.g. countdown data in JS bundles)
+    # Strategy 4: ISO datetime in the future (auction end time in JS bundles)
     if not ending_at:
-        # Look for ISO 8601 dates in the future (auction end time)
         import datetime as _dt
-        now_str = _dt.datetime.utcnow().strftime("%Y-%m-%d")
-        m = _re.search(r'"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))"', html)
-        ending_at = m.group(1) if m else None
-        if ending_at:
-            logger.info("_scrape_offer_page: ISO date fallback=%r", ending_at)
+        now_iso = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        for m in _re.finditer(r'"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))"', html):
+            candidate = m.group(1)
+            # Only accept dates in the future
+            candidate_cmp = candidate[:19].replace("T", " ")
+            if candidate_cmp > now_iso:
+                ending_at = candidate
+                logger.info("_scrape_offer_page: ISO date fallback=%r", ending_at)
+                break
 
     if not title:
         m = _re.search(r'"name"\s*:\s*"([^"\\]{3,})"', html)
