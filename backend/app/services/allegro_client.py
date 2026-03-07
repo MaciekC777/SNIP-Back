@@ -187,17 +187,13 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     title: Optional[str] = None
     price: Optional[str] = None
 
-    # Primary: parse __NEXT_DATA__ JSON (Next.js SSR)
-    # Log HTML snippet to diagnose what page ScraperAPI returned
-    logger.info("_scrape_offer_page: HTML head: %s", html[:500].replace("\n", " "))
-    has_ending = "endingAt" in html or "endingTime" in html or "endTime" in html
-    logger.info("_scrape_offer_page: html contains ending key: %s", has_ending)
+    logger.info("_scrape_offer_page: html len=%d, has __NEXT_DATA__: %s", len(html), '__NEXT_DATA__' in html)
 
-    nd_match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', html)
+    # Strategy 1: __NEXT_DATA__ JSON block
+    nd_match = _re.search(r'<script id="__NEXT_DATA__"[^>]*>([\s\S]+?)</script>', html)
     if nd_match:
         try:
             data = _json.loads(nd_match.group(1))
-            # Allegro uses different field names across versions
             ending_at = (
                 _find_key(data, "endingAt")
                 or _find_key(data, "endingTime")
@@ -208,19 +204,41 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
             logger.info("_scrape_offer_page: __NEXT_DATA__ parsed, ending_at=%r", ending_at)
         except Exception as exc:
             logger.warning("_scrape_offer_page: __NEXT_DATA__ parse failed: %s", exc)
-    else:
-        logger.warning("_scrape_offer_page: __NEXT_DATA__ not found in HTML (len=%d)", len(html))
 
-    # Fallback: raw regex — covers all known field name variants
+    # Strategy 2: JSON-LD structured data
+    if not ending_at:
+        for ld_match in _re.finditer(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]+?)</script>', html):
+            try:
+                ld = _json.loads(ld_match.group(1))
+                ending_at = _find_key(ld, "availabilityEnds") or _find_key(ld, "endDate") or _find_key(ld, "endTime")
+                if ending_at:
+                    logger.info("_scrape_offer_page: JSON-LD found ending_at=%r", ending_at)
+                    break
+            except Exception:
+                pass
+
+    # Strategy 3: raw regex over entire HTML
     if not ending_at:
         m = _re.search(r'"(?:endingAt|endingTime|endTime)"\s*:\s*"([^"]+)"', html)
         ending_at = m.group(1) if m else None
+
+    # Strategy 4: ISO datetime near offer ID (e.g. countdown data in JS bundles)
+    if not ending_at:
+        # Look for ISO 8601 dates in the future (auction end time)
+        import datetime as _dt
+        now_str = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+        m = _re.search(r'"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))"', html)
+        ending_at = m.group(1) if m else None
+        if ending_at:
+            logger.info("_scrape_offer_page: ISO date fallback=%r", ending_at)
+
     if not title:
         m = _re.search(r'"name"\s*:\s*"([^"\\]{3,})"', html)
         title = m.group(1) if m else None
 
+    logger.info("_scrape_offer_page: final ending_at=%r for offer %s", ending_at, offer_id)
+
     if not ending_at:
-        logger.warning("_scrape_offer_page: end time not found on page for %s (html_len=%d)", offer_id, len(html))
         return None
 
     logger.info("_scrape_offer_page: offer %s endingAt=%s title=%r", offer_id, ending_at, title)
