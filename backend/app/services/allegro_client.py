@@ -13,7 +13,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _session: Optional[aiohttp.ClientSession] = None
-_client_token: Optional[str] = None  # cached client credentials token
 
 
 def get_session() -> aiohttp.ClientSession:
@@ -74,39 +73,44 @@ async def _request(
 
 # ---------- Public API ----------
 
-async def _get_client_token() -> str:
-    """Get or refresh a client credentials access token."""
-    global _client_token
-    if _client_token:
-        return _client_token
+
+async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url: Optional[str] = None) -> dict[str, Any]:
+    """Fetch offer details by scraping the Allegro offer page (no API approval needed)."""
+    import json as _json
+    import re as _re
+    url = offer_url or f"https://allegro.pl/oferta/{offer_id}"
     session = get_session()
-    async with session.post(
-        f"{settings.allegro_auth_url}/token",
-        data={"grant_type": "client_credentials"},
-        auth=_client_auth(),
-    ) as resp:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    async with session.get(url, headers=headers, allow_redirects=True) as resp:
+        if resp.status == 404:
+            raise AllegroNotFoundError(f"Offer {offer_id} not found")
         resp.raise_for_status()
-        data = await resp.json()
-        _client_token = data["access_token"]
-        return _client_token
+        html = await resp.text()
 
+    # Extract endingAt from __NEXT_DATA__ or inline JSON
+    ending_match = _re.search(r'"endingAt"\s*:\s*"([^"]+)"', html)
+    ending_at = ending_match.group(1) if ending_match else None
 
-async def get_offer(offer_id: str, access_token: Optional[str] = None) -> dict[str, Any]:
-    """Fetch offer details (title, endingAt, currentPrice, etc.) via public listing search."""
-    global _client_token
-    url = f"{settings.allegro_api_url}/offers/listing"
-    token = access_token or await _get_client_token()
-    try:
-        result = await _request("GET", url, access_token=token, params={"offer.id": offer_id, "limit": 1})
-    except Exception:
-        # Client token may have expired — invalidate and retry once
-        _client_token = None
-        token = await _get_client_token()
-        result = await _request("GET", url, access_token=token, params={"offer.id": offer_id, "limit": 1})
-    items = result.get("items", {}).get("regular", [])
-    if not items:
-        raise AllegroNotFoundError(f"Offer {offer_id} not found")
-    return items[0]
+    title_match = _re.search(r'"name"\s*:\s*"([^"]+)"', html)
+    title = title_match.group(1) if title_match else None
+
+    price_match = _re.search(r'"currentPrice"\s*:\s*\{[^}]*"amount"\s*:\s*"?([0-9.]+)"?', html)
+    if not price_match:
+        price_match = _re.search(r'"price"\s*:\s*\{[^}]*"amount"\s*:\s*"?([0-9.]+)"?', html)
+    price = price_match.group(1) if price_match else None
+
+    if not ending_at:
+        raise ValueError(f"Could not extract endingAt from Allegro page for offer {offer_id}")
+
+    return {
+        "endingAt": ending_at,
+        "name": title,
+        "sellingMode": {"price": {"amount": price}} if price else {},
+    }
 
 
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:
