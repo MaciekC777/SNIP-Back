@@ -72,18 +72,8 @@ async def _request(
 
 async def get_offer(offer_id: str, access_token: Optional[str] = None) -> dict[str, Any]:
     """Fetch offer details (title, endingAt, currentPrice, etc.)."""
-    url = f"{settings.allegro_api_url}/offers/{offer_id}"
-    session = get_session()
-    auth_header = f"Bearer {access_token}" if access_token else f"Basic {_basic_auth()}"
-    headers = {
-        "Accept": "application/vnd.allegro.public.v1+json",
-        "Authorization": auth_header,
-    }
-    async with session.get(url, headers=headers) as resp:
-        if resp.status == 404:
-            raise AllegroNotFoundError(f"Offer {offer_id} not found")
-        resp.raise_for_status()
-        return await resp.json()
+    url = f"{settings.allegro_api_url}/sale/offers/{offer_id}"
+    return await _request("GET", url, access_token=access_token)
 
 
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:

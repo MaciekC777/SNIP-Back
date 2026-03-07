@@ -59,7 +59,11 @@ async def _poll_snipes() -> None:
                 if encrypted_token:
                     access_token = token_manager.decrypt_token(encrypted_token)
                     offer = await allegro_client.get_offer(snipe["allegro_offer_id"], access_token=access_token)
-                    end_time_str = offer.get("endingAt") or offer.get("endTime")
+                    end_time_str = (
+                        offer.get("publication", {}).get("endingAt")
+                        or offer.get("endingAt")
+                        or offer.get("endTime")
+                    )
                     if end_time_str:
                         await supabase_client.update_snipe_status(
                             snipe_id, SnipeStatus.waiting,
