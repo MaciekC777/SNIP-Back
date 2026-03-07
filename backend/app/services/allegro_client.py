@@ -13,6 +13,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _session: Optional[aiohttp.ClientSession] = None
+_client_token: Optional[str] = None  # cached client credentials token
 
 
 def get_session() -> aiohttp.ClientSession:
@@ -70,10 +71,35 @@ async def _request(
 
 # ---------- Public API ----------
 
+async def _get_client_token() -> str:
+    """Get or refresh a client credentials access token."""
+    global _client_token
+    if _client_token:
+        return _client_token
+    session = get_session()
+    async with session.post(
+        f"{settings.allegro_auth_url}/token",
+        data={"grant_type": "client_credentials"},
+        auth=_client_auth(),
+    ) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+        _client_token = data["access_token"]
+        return _client_token
+
+
 async def get_offer(offer_id: str, access_token: Optional[str] = None) -> dict[str, Any]:
     """Fetch offer details (title, endingAt, currentPrice, etc.) via public listing search."""
+    global _client_token
     url = f"{settings.allegro_api_url}/offers/listing"
-    result = await _request("GET", url, access_token=access_token, params={"offer.id": offer_id, "limit": 1})
+    token = access_token or await _get_client_token()
+    try:
+        result = await _request("GET", url, access_token=token, params={"offer.id": offer_id, "limit": 1})
+    except Exception:
+        # Client token may have expired — invalidate and retry once
+        _client_token = None
+        token = await _get_client_token()
+        result = await _request("GET", url, access_token=token, params={"offer.id": offer_id, "limit": 1})
     items = result.get("items", {}).get("regular", [])
     if not items:
         raise AllegroNotFoundError(f"Offer {offer_id} not found")
