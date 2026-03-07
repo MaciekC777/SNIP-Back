@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _session: Optional[aiohttp.ClientSession] = None
 _offers_listing_blocked: bool = False  # cached: True once we know /offers/listing returns 403
+_scraping_blocked: bool = False  # cached: True once we know allegro.pl scraping returns 403
 
 
 def get_session() -> aiohttp.ClientSession:
@@ -107,24 +108,7 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         except Exception as e1:
             logger.warning("GET /offers/listing failed: %s", e1)
 
-    # Try 2: GET /sale/offers/{id} — requires allegro:api:sale:offers:read scope
-    # Works if Allegro allows buyers to read any offer details (not just seller's own)
-    try:
-        result = await _request("GET", f"{settings.allegro_api_url}/sale/offers/{offer_id}", access_token=access_token)
-        end = (
-            result.get("publication", {}).get("endingAt")
-            or result.get("endingAt")
-        )
-        logger.info("GET /sale/offers/%s → publication.endingAt=%r keys=%s", offer_id, end, list(result.keys()))
-        return result
-    except AllegroAccessDeniedError as e2:
-        logger.warning("GET /sale/offers/%s access denied (seller-only endpoint): %s", offer_id, e2)
-    except AllegroNotFoundError:
-        raise
-    except Exception as e2:
-        logger.warning("GET /sale/offers/%s failed: %s", offer_id, e2)
-
-    # Try 3: GET /bidding/offers/{id}
+    # Try 2: GET /bidding/offers/{id}
     try:
         result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}", access_token=access_token)
         logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
@@ -141,10 +125,12 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         logger.warning("GET /bidding/offers/%s failed: %s — trying page scrape", offer_id, e2)
 
     # Try 3: scrape the offer page (no API approval needed)
-    logger.info("Scraping offer page for %s", offer_id)
-    scraped = await _scrape_offer_page(offer_id, offer_url)
-    if scraped:
-        return scraped
+    global _scraping_blocked
+    if not _scraping_blocked:
+        logger.info("Scraping offer page for %s", offer_id)
+        scraped = await _scrape_offer_page(offer_id, offer_url)
+        if scraped:
+            return scraped
 
     raise AllegroAccessDeniedError(f"Could not fetch offer {offer_id} from any source")
 
@@ -164,6 +150,11 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
             resp = await s.get(url, timeout=15, allow_redirects=True)
         if resp.status_code == 404:
             raise AllegroNotFoundError(f"Offer {offer_id} not found (scrape 404)")
+        if resp.status_code == 403:
+            global _scraping_blocked
+            logger.warning("_scrape_offer_page: %s → 403 (IP blocked by Cloudflare) — disabling scraping for this session", url)
+            _scraping_blocked = True
+            return None
         if resp.status_code != 200:
             logger.warning("_scrape_offer_page: %s → %d", url, resp.status_code)
             return None
