@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 _session: Optional[aiohttp.ClientSession] = None
 _offers_listing_blocked: bool = False  # cached: True once we know /offers/listing returns 403
 _scraping_blocked: bool = False  # cached: True once we know allegro.pl scraping returns 403
+_app_token: Optional[str] = None
+_app_token_expires: float = 0
 
 
 def get_session() -> aiohttp.ClientSession:
@@ -82,18 +84,38 @@ async def _request(
     raise last_exc
 
 
+# ---------- App-level token (client_credentials) ----------
+
+async def _get_app_token() -> str:
+    """Return a cached app-level token via client_credentials flow."""
+    import time as _time
+    global _app_token, _app_token_expires
+    if _app_token and _time.time() < _app_token_expires - 60:
+        return _app_token
+    url = f"{settings.allegro_auth_url}/token"
+    session = get_session()
+    async with session.post(url, data={"grant_type": "client_credentials"}, auth=_client_auth()) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+    _app_token = data["access_token"]
+    _app_token_expires = _time.time() + int(data.get("expires_in", 3600))
+    logger.info("Obtained new app-level token (expires_in=%s)", data.get("expires_in"))
+    return _app_token
+
+
 # ---------- Public API ----------
 
 
 async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url: Optional[str] = None) -> dict[str, Any]:
     """Fetch offer details — try API endpoints, then fall back to page scraping."""
-    # Try 1: GET /offers/listing?offer.id={id}  (public marketplace search)
+    # Try 1: GET /offers/listing?offer.id={id}  (public marketplace search — use app token)
     global _offers_listing_blocked
     if not _offers_listing_blocked:
         try:
+            app_token = await _get_app_token()
             result = await _request(
                 "GET", f"{settings.allegro_api_url}/offers/listing",
-                access_token=access_token,
+                access_token=app_token,
                 params={"offer.id": offer_id, "limit": 1},
             )
             items = result.get("items", {}).get("regular", [])
