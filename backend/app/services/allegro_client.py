@@ -158,11 +158,27 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
     raise AllegroAccessDeniedError(f"Could not fetch offer {offer_id} from any source")
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
+}
+
+
 async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Scrape auction end time and basic details from the Allegro offer page.
 
-    Uses ScraperAPI (residential proxy) when SCRAPER_API_KEY is configured.
-    Falls back to curl_cffi Chrome TLS impersonation otherwise.
+    Attempt order:
+    1. Direct aiohttp GET with browser headers (no external deps)
+    2. curl_cffi Chrome TLS impersonation (chrome131)
+    3. ScraperAPI fallback (if SCRAPER_API_KEY configured)
     """
     import json as _json
     import re as _re
@@ -173,45 +189,60 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     status = 0
     html = ""
 
-    scraperapi_ok = False
+    # Attempt 1: direct aiohttp with browser headers
     try:
-        if settings.scraper_api_key:
-            proxy_url = f"https://api.scraperapi.com?{urlencode({'api_key': settings.scraper_api_key, 'url': scrape_url, 'country_code': 'pl', 'render': 'true', 'premium': 'true'})}"
-            session = get_session()
-            async with session.get(proxy_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        connector = aiohttp.TCPConnector(ssl=True)
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=_BROWSER_HEADERS) as s:
+            async with s.get(scrape_url, allow_redirects=True) as resp:
                 status = resp.status
                 body = await resp.text()
                 if status == 200:
                     html = body
-                    scraperapi_ok = True
+                    logger.info("_scrape_offer_page: direct_get → 200 for %s", scrape_url)
                 else:
-                    logger.warning("_scrape_offer_page: ScraperAPI → %d: %s", status, body[:300])
+                    logger.warning("_scrape_offer_page: direct_get → %d for %s, body=%r", status, scrape_url, body[:500])
     except Exception as exc:
-        logger.warning("_scrape_offer_page: ScraperAPI exception: %s", exc)
+        logger.warning("_scrape_offer_page: direct_get exception: %s", exc)
 
-    # Fallback: curl_cffi Chrome TLS impersonation (works if Cloudflare doesn't block DC IPs)
-    if not scraperapi_ok:
+    # Attempt 2: curl_cffi Chrome TLS impersonation
+    if not html:
         try:
             from curl_cffi.requests import AsyncSession
-            async with AsyncSession(impersonate="chrome120") as s:
+            async with AsyncSession(impersonate="chrome131") as s:
                 resp = await s.get(scrape_url, timeout=15, allow_redirects=True)
             status = resp.status_code
             if status == 200:
                 html = resp.text
-                logger.info("_scrape_offer_page: curl_cffi succeeded for %s", scrape_url)
+                logger.info("_scrape_offer_page: curl_cffi chrome131 → 200 for %s", scrape_url)
             else:
-                logger.warning("_scrape_offer_page: curl_cffi → %d for %s", status, scrape_url)
+                logger.warning("_scrape_offer_page: curl_cffi chrome131 → %d for %s, body=%r", status, scrape_url, resp.text[:500])
         except Exception as exc:
             logger.warning("_scrape_offer_page: curl_cffi failed for %s: %s", scrape_url, exc)
 
+    # Attempt 3: ScraperAPI (free plan, no premium)
+    if not html:
+        try:
+            if settings.scraper_api_key:
+                proxy_url = f"https://api.scraperapi.com?{urlencode({'api_key': settings.scraper_api_key, 'url': scrape_url, 'country_code': 'pl'})}"
+                session = get_session()
+                async with session.get(proxy_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    status = resp.status
+                    body = await resp.text()
+                    if status == 200:
+                        html = body
+                        logger.info("_scrape_offer_page: ScraperAPI → 200 for %s", scrape_url)
+                    else:
+                        logger.warning("_scrape_offer_page: ScraperAPI → %d: %s", status, body[:300])
+        except Exception as exc:
+            logger.warning("_scrape_offer_page: ScraperAPI exception: %s", exc)
+
     if status == 404:
         raise AllegroNotFoundError(f"Offer {offer_id} not found (scrape 404)")
-    if status == 403 and not settings.scraper_api_key:
+    if not html:
         global _scraping_blocked
-        logger.warning("_scrape_offer_page: 403 (Cloudflare IP block) — disabling for this session. Set SCRAPER_API_KEY to fix.")
+        logger.warning("_scrape_offer_page: all attempts failed (last status=%d) — disabling scraping for this session.", status)
         _scraping_blocked = True
-        return None
-    if status != 200:
         return None
 
     ending_at: Optional[str] = None
