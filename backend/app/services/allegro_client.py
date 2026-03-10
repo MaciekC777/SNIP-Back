@@ -144,9 +144,11 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         except Exception as e1:
             logger.warning("GET /offers/listing failed: %s", e1)
 
-    # Try 2: GET /bidding/offers/{id}
+    # Try 2: GET /bidding/offers/{id} (beta endpoint — requires beta Accept header)
     try:
-        result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}", access_token=access_token)
+        result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}",
+                                access_token=access_token,
+                                headers={"Accept": "application/vnd.allegro.beta.v1+json"})
         logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
         if _has_ending(result):
             return {**(api_result or {}), **result}
