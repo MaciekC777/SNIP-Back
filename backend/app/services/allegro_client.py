@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 _session: Optional[aiohttp.ClientSession] = None
 _offers_listing_blocked: bool = False  # cached: True once we know /offers/listing returns 403
-_scraping_blocked: bool = False  # cached: True once we know allegro.pl scraping returns 403
 _app_token: Optional[str] = None
 _app_token_expires: float = 0
 
@@ -108,8 +107,18 @@ async def _get_app_token() -> str:
 
 async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url: Optional[str] = None) -> dict[str, Any]:
     """Fetch offer details — try API endpoints, then fall back to page scraping."""
-    # Try 1: GET /offers/listing?offer.id={id}  (public marketplace search — use app token)
     global _offers_listing_blocked
+
+    api_result: Optional[dict] = None  # best result from API (may lack endingAt)
+
+    def _has_ending(d: dict) -> bool:
+        return bool(
+            _find_key(d, "endingAt")
+            or _find_key(d, "endingTime")
+            or _find_key(d, "endTime")
+        )
+
+    # Try 1: GET /offers/listing?offer.id={id}  (public marketplace search — use app token)
     if not _offers_listing_blocked:
         try:
             app_token = await _get_app_token()
@@ -121,8 +130,12 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
             items = result.get("items", {}).get("regular", [])
             if items:
                 logger.info("GET /offers/listing offer.id=%s → found, keys: %s", offer_id, list(items[0].keys()))
-                return items[0]
-            logger.warning("GET /offers/listing offer.id=%s → 200 but no items", offer_id)
+                if _has_ending(items[0]):
+                    return items[0]
+                api_result = items[0]
+                logger.info("GET /offers/listing: no endingAt in result — trying next source")
+            else:
+                logger.warning("GET /offers/listing offer.id=%s → 200 but no items", offer_id)
         except AllegroAccessDeniedError as e1:
             logger.warning("GET /offers/listing access denied — disabling for this session: %s", e1)
             _offers_listing_blocked = True
@@ -135,7 +148,10 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
     try:
         result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}", access_token=access_token)
         logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
-        return result
+        if _has_ending(result):
+            return {**(api_result or {}), **result}
+        api_result = api_result or result
+        logger.info("GET /bidding/offers/%s: no endingAt — trying page scrape", offer_id)
     except AllegroNotFoundError as e2:
         body = str(e2).lower()
         if "unavailable" in body or "feature" in body:
@@ -148,12 +164,15 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         logger.warning("GET /bidding/offers/%s failed: %s — trying page scrape", offer_id, e2)
 
     # Try 3: scrape the offer page (no API approval needed)
-    global _scraping_blocked
-    if not _scraping_blocked:
-        logger.info("Scraping offer page for %s", offer_id)
-        scraped = await _scrape_offer_page(offer_id, offer_url)
-        if scraped:
-            return scraped
+    logger.info("Scraping offer page for %s", offer_id)
+    scraped = await _scrape_offer_page(offer_id, offer_url)
+    if scraped and scraped.get("endingAt"):
+        # Merge: api_result has name/images/price, scraped has endingAt
+        return {**scraped, **(api_result or {}), "endingAt": scraped["endingAt"]}
+
+    if api_result:
+        logger.warning("get_offer: no endingAt found from any source for %s, returning partial data", offer_id)
+        return api_result
 
     raise AllegroAccessDeniedError(f"Could not fetch offer {offer_id} from any source")
 
@@ -240,9 +259,7 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     if status == 404:
         raise AllegroNotFoundError(f"Offer {offer_id} not found (scrape 404)")
     if not html:
-        global _scraping_blocked
-        logger.warning("_scrape_offer_page: all attempts failed (last status=%d) — disabling scraping for this session.", status)
-        _scraping_blocked = True
+        logger.warning("_scrape_offer_page: all attempts failed (last status=%d) for %s", status, offer_id)
         return None
 
     ending_at: Optional[str] = None
@@ -316,7 +333,7 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
         if pm:
             try:
                 day, mon_str, year, time_str = pm.group(1), pm.group(2), pm.group(3), pm.group(4)
-                mon_str = mon_str.replace('pa', 'paź') if mon_str == 'paz' else mon_str
+                mon_str = 'paź' if mon_str == 'paz' else mon_str
                 month = _PL_MONTHS.get(mon_str)
                 if month:
                     h, mi, s = map(int, time_str.split(':'))
