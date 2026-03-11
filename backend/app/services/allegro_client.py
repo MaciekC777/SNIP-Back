@@ -384,8 +384,8 @@ def _find_key(obj: Any, key: str) -> Any:
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:
     """Place a bid on an auction offer."""
     url = f"{settings.allegro_api_url}/bidding/offers/{offer_id}/bid"
-    params = {"amount": str(amount), "currency": "PLN"}
-    return await _request("GET", url, access_token=access_token, params=params)
+    body = {"amount": str(amount), "currency": "PLN"}
+    return await _request("PUT", url, access_token=access_token, json=body)
 
 
 async def get_user_profile(access_token: str) -> dict[str, Any]:
