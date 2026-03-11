@@ -144,9 +144,9 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         except Exception as e1:
             logger.warning("GET /offers/listing failed: %s", e1)
 
-    # Try 2: GET /bidding/offers/{id}/bid (beta endpoint — requires beta Accept header)
+    # Try 2: GET /bidding/offers/{id} (beta endpoint — offer details incl. endingAt)
     try:
-        result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}/bid",
+        result = await _request("GET", f"{settings.allegro_api_url}/bidding/offers/{offer_id}",
                                 access_token=access_token,
                                 headers={"Accept": "application/vnd.allegro.beta.v1+json"})
         logger.info("GET /bidding/offers/%s keys: %s", offer_id, list(result.keys()))
@@ -155,11 +155,8 @@ async def get_offer(offer_id: str, access_token: Optional[str] = None, offer_url
         api_result = api_result or result
         logger.info("GET /bidding/offers/%s: no endingAt — trying page scrape", offer_id)
     except AllegroNotFoundError as e2:
-        body = str(e2).lower()
-        if "unavailable" in body or "feature" in body:
-            logger.warning("GET /bidding/offers/%s feature unavailable, trying page scrape", offer_id)
-        else:
-            raise AllegroNotFoundError(f"Offer {offer_id} not found") from e2
+        # 404 here means offer truly doesn't exist — but fall through to scraping to confirm
+        logger.warning("GET /bidding/offers/%s → 404, falling through to page scrape", offer_id)
     except AllegroAccessDeniedError:
         logger.warning("GET /bidding/offers/%s access denied, trying page scrape", offer_id)
     except Exception as e2:
