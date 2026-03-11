@@ -275,14 +275,25 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
     if nd_match:
         try:
             data = _json.loads(nd_match.group(1))
+            # Try specific auction paths first before broad _find_key
+            # Allegro Next.js structure: props.pageProps.offer.endingAt (or similar)
+            props = data.get("props", {}).get("pageProps", {})
+            offer_node = props.get("offer") or props.get("item") or props.get("auction") or {}
             ending_at = (
-                _find_key(data, "endingAt")
+                offer_node.get("endingAt")
+                or offer_node.get("endingTime")
+                or offer_node.get("endTime")
+                # Fallback: broad search but log what we found to help debug
+                or _find_key(data, "endingAt")
                 or _find_key(data, "endingTime")
                 or _find_key(data, "endTime")
             )
-            title = title or _find_key(data, "name")
+            title = title or offer_node.get("name") or _find_key(data, "name")
             price = price or str(_find_key(data, "amount") or "")
-            logger.info("_scrape_offer_page: __NEXT_DATA__ parsed, ending_at=%r", ending_at)
+            logger.info(
+                "_scrape_offer_page: __NEXT_DATA__ parsed, ending_at=%r, pageProps_keys=%s",
+                ending_at, list(props.keys())[:10],
+            )
         except Exception as exc:
             logger.warning("_scrape_offer_page: __NEXT_DATA__ parse failed: %s", exc)
 
@@ -303,18 +314,8 @@ async def _scrape_offer_page(offer_id: str, offer_url: Optional[str] = None) -> 
         m = _re.search(r'"(?:endingAt|endingTime|endTime)"\s*:\s*"([^"]+)"', html)
         ending_at = m.group(1) if m else None
 
-    # Strategy 4: ISO datetime in the future (auction end time in JS bundles)
-    if not ending_at:
-        import datetime as _dt
-        now_iso = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        for m in _re.finditer(r'"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))"', html):
-            candidate = m.group(1)
-            # Only accept dates in the future
-            candidate_cmp = candidate[:19].replace("T", " ")
-            if candidate_cmp > now_iso:
-                ending_at = candidate
-                logger.info("_scrape_offer_page: ISO date fallback=%r", ending_at)
-                break
+    # Strategy 4: REMOVED — picking first future ISO date from HTML is unreliable
+    # (Allegro pages contain many future dates: promos, shipping estimates, etc.)
 
     # Strategy 5: Polish date format visible in page text
     # e.g. "(niedz., 8 mar 2026, 11:36:47)" → ISO UTC
@@ -383,8 +384,8 @@ def _find_key(obj: Any, key: str) -> Any:
 async def place_bid(offer_id: str, amount: float, access_token: str) -> dict[str, Any]:
     """Place a bid on an auction offer."""
     url = f"{settings.allegro_api_url}/bidding/offers/{offer_id}/bid"
-    payload = {"amount": {"amount": str(amount), "currency": "PLN"}}
-    return await _request("PUT", url, access_token=access_token, json=payload)
+    params = {"amount": str(amount), "currency": "PLN"}
+    return await _request("GET", url, access_token=access_token, params=params)
 
 
 async def get_user_profile(access_token: str) -> dict[str, Any]:
